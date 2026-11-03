@@ -1,0 +1,17 @@
+
+# Python-generated files
+# Virtual environments
+*.egg-info
+*.py[oc]
+.env
+reports.db
+logs/
+.venv
+__pycache__/
+build/
+dist/
+wheels/
+
+# local tooling
+.claude/
+graft/

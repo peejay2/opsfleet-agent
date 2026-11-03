@@ -1,0 +1,22 @@
+[project]
+name = "opsfleet-agent"
+version = "0.1.0"
+description = "Chat assistant that answers executives' questions about retail sales data in BigQuery, built with Google ADK and Gemini"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "db-dtypes>=1.9.0",
+    "google-adk>=2.13.0",
+    "google-cloud-bigquery>=3.46.2",
+    "pandas>=3.1.0",
+    "python-dotenv>=1.2.4",
+    "sqlglot>=30.25.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

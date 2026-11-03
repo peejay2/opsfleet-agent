@@ -1,0 +1,6 @@
+{
+  "anna": {"brand": ["Calvin Klein", "Levi's"]},
+  "ben": {"category": ["Jeans", "Sweaters"]},
+  "carla": {"distribution_center": ["Memphis TN", "Chicago IL"]},
+  "dave": {"category": ["Jeans"], "distribution_center": ["Houston TX", "New Orleans LA"]}
+}

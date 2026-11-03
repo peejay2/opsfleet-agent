@@ -1,0 +1,132 @@
+[
+  {
+    "id": "monthly-revenue",
+    "question": "What was our monthly revenue over the last 12 months?",
+    "definitions": "Revenue = sum of order_items.sale_price for items not Cancelled or Returned, dated by order_items.created_at.",
+    "sql": "SELECT FORMAT_DATE('%Y-%m', DATE(created_at)) AS month, ROUND(SUM(sale_price), 2) AS revenue, COUNT(DISTINCT order_id) AS orders\nFROM order_items\nWHERE status NOT IN ('Cancelled', 'Returned')\n  AND DATE(created_at) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 12 MONTH)\n  AND DATE(created_at) < DATE_TRUNC(CURRENT_DATE(), MONTH)\nGROUP BY month\nORDER BY month",
+    "report": "Lead with the total for the 12 full months and the change versus the 12 months before. Point out the best and worst months and any steady trend. Leave out the current month because it is incomplete, and say so.",
+    "source": "analyst",
+    "reviewed_by": "prototype seed",
+    "version": 1
+  },
+  {
+    "id": "top-categories",
+    "question": "Which product categories brought in the most revenue this year?",
+    "definitions": "Revenue as in monthly-revenue. 'This year' = 1 January of the current year up to today.",
+    "sql": "SELECT p.category, ROUND(SUM(oi.sale_price), 2) AS revenue, COUNT(*) AS items_sold, ROUND(AVG(oi.sale_price), 2) AS avg_price\nFROM order_items oi\nJOIN products p ON oi.product_id = p.id\nWHERE oi.status NOT IN ('Cancelled', 'Returned')\n  AND DATE(oi.created_at) >= DATE_TRUNC(CURRENT_DATE(), YEAR)\n  AND oi.created_at <= CURRENT_TIMESTAMP()\nGROUP BY p.category\nORDER BY revenue DESC\nLIMIT 10",
+    "report": "Rank the categories by revenue and give each one's share of the total. Say whether a category leads because it sells more items or because its items cost more (items_sold versus avg_price).",
+    "source": "analyst",
+    "reviewed_by": "prototype seed",
+    "version": 1
+  },
+  {
+    "id": "state-underspending",
+    "question": "Why are users in California underspending, and how do they compare to users in Texas?",
+    "definitions": "Spend per customer = revenue / customers who bought in the period. Break it down into orders per customer x average order value. Use the last 12 months.",
+    "sql": "WITH sales AS (\n  SELECT u.state, oi.user_id, oi.order_id, oi.sale_price\n  FROM order_items oi\n  JOIN users u ON oi.user_id = u.id\n  WHERE oi.status NOT IN ('Cancelled', 'Returned')\n    AND DATE(oi.created_at) >= DATE_SUB(CURRENT_DATE(), INTERVAL 12 MONTH)\n  AND oi.created_at <= CURRENT_TIMESTAMP()\n    AND u.state IN ('California', 'Texas')\n)\nSELECT state,\n  COUNT(DISTINCT user_id) AS customers,\n  ROUND(SUM(sale_price) / COUNT(DISTINCT user_id), 2) AS spend_per_customer,\n  ROUND(COUNT(DISTINCT order_id) / COUNT(DISTINCT user_id), 2) AS orders_per_customer,\n  ROUND(SUM(sale_price) / COUNT(DISTINCT order_id), 2) AS avg_order_value\nFROM sales\nGROUP BY state",
+    "report": "'Underspending' means lower spend per customer, not lower total revenue: a big state has more revenue simply because it has more customers. Compare the two states on spend per customer, then say which part explains the gap: fewer orders per customer, or smaller orders. Follow up with the category mix if the order value differs.",
+    "source": "analyst",
+    "reviewed_by": "prototype seed",
+    "version": 1
+  },
+  {
+    "id": "churn-rate",
+    "question": "Why did our churn rate spike last month?",
+    "definitions": "A customer churns when 90 days pass after their last completed order with no new order. Monthly churn rate = customers who churned during the month / customers who had ordered in the 90 days before the month started.",
+    "sql": "WITH purchases AS (\n  SELECT DISTINCT user_id, DATE(created_at) AS day\n  FROM order_items\n  WHERE status NOT IN ('Cancelled', 'Returned') AND created_at <= CURRENT_TIMESTAMP()\n),\nlast_purchase AS (\n  SELECT user_id, MAX(day) AS last_day FROM purchases GROUP BY user_id\n),\nmonths AS (\n  SELECT month FROM UNNEST(GENERATE_DATE_ARRAY(DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 6 MONTH), DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 1 MONTH), INTERVAL 1 MONTH)) AS month\n)\nSELECT FORMAT_DATE('%Y-%m', m.month) AS month,\n  (SELECT COUNT(DISTINCT user_id) FROM purchases WHERE day >= DATE_SUB(m.month, INTERVAL 90 DAY) AND day < m.month) AS active_at_start,\n  (SELECT COUNT(*) FROM last_purchase WHERE DATE_ADD(last_day, INTERVAL 90 DAY) >= m.month AND DATE_ADD(last_day, INTERVAL 90 DAY) < DATE_ADD(m.month, INTERVAL 1 MONTH)) AS churned\nFROM months m\nORDER BY month",
+    "report": "Show the churn rate (churned / active_at_start) for the last six months so the spike is visible against normal months. Then explain it: churn in a month reflects customers who last bought three months earlier, so look at who bought then (traffic source, category, first-time versus repeat buyers). State the 90-day definition, because the business may use another.",
+    "source": "analyst",
+    "reviewed_by": "prototype seed",
+    "version": 1
+  },
+  {
+    "id": "quarterly-report",
+    "question": "Create a report for Q1 including insights and action items for Q2.",
+    "definitions": "Quarters are calendar quarters. Compare with the previous quarter. Revenue as in monthly-revenue; return rate = returned items / items sold (not cancelled).",
+    "sql": "SELECT FORMAT_DATE('%Y-Q%Q', DATE(created_at)) AS quarter,\n  ROUND(SUM(IF(status NOT IN ('Cancelled', 'Returned'), sale_price, 0)), 2) AS revenue,\n  COUNT(DISTINCT IF(status NOT IN ('Cancelled', 'Returned'), order_id, NULL)) AS orders,\n  COUNT(DISTINCT IF(status NOT IN ('Cancelled', 'Returned'), user_id, NULL)) AS customers,\n  ROUND(COUNTIF(status = 'Returned') / COUNTIF(status != 'Cancelled'), 3) AS return_rate\nFROM order_items\nWHERE DATE(created_at) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), YEAR), INTERVAL 3 MONTH)\n  AND DATE(created_at) < DATE_ADD(DATE_TRUNC(CURRENT_DATE(), YEAR), INTERVAL 3 MONTH)\nGROUP BY quarter\nORDER BY quarter",
+    "report": "Structure: (1) Summary in two or three sentences. (2) Key figures for the quarter versus the previous one: revenue, orders, customers, average order value, return rate. (3) Insights: the two or three biggest movers, found with follow-up queries by category and by month. (4) Action items for next quarter, each tied to one insight. Say which year's Q1 you used if the user didn't.",
+    "source": "analyst",
+    "reviewed_by": "prototype seed",
+    "version": 1
+  },
+  {
+    "id": "return-rate-by-category",
+    "question": "Which categories have the highest return rate?",
+    "definitions": "Return rate = returned items / items not cancelled. Ignore categories with fewer than 50 items sold, the rate is too noisy.",
+    "sql": "SELECT p.category,\n  COUNTIF(oi.status != 'Cancelled') AS items_sold,\n  COUNTIF(oi.status = 'Returned') AS items_returned,\n  ROUND(COUNTIF(oi.status = 'Returned') / NULLIF(COUNTIF(oi.status != 'Cancelled'), 0), 3) AS return_rate\nFROM order_items oi\nJOIN products p ON oi.product_id = p.id\nWHERE DATE(oi.created_at) >= DATE_SUB(CURRENT_DATE(), INTERVAL 12 MONTH)\n  AND oi.created_at <= CURRENT_TIMESTAMP()\nGROUP BY p.category\nHAVING items_sold >= 50\nORDER BY return_rate DESC",
+    "report": "List the categories from highest return rate down, with the overall rate for comparison. Mention the revenue lost to returns for the worst ones. Note that the data shows that items were returned, not why.",
+    "source": "analyst",
+    "reviewed_by": "prototype seed",
+    "version": 1
+  },
+  {
+    "id": "average-order-value",
+    "question": "How has our average order value changed over time?",
+    "definitions": "Average order value = revenue / number of orders, where an order is the sum of its items not Cancelled or Returned.",
+    "sql": "WITH order_totals AS (\n  SELECT order_id, DATE(MIN(created_at)) AS day, SUM(sale_price) AS total, COUNT(*) AS items\n  FROM order_items\n  WHERE status NOT IN ('Cancelled', 'Returned')\n  GROUP BY order_id\n)\nSELECT FORMAT_DATE('%Y-%m', day) AS month, ROUND(AVG(total), 2) AS avg_order_value, ROUND(AVG(items), 2) AS items_per_order, COUNT(*) AS orders\nFROM order_totals\nWHERE day >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 12 MONTH) AND day < DATE_TRUNC(CURRENT_DATE(), MONTH)\nGROUP BY month\nORDER BY month",
+    "report": "Describe the trend in average order value and split it into items per order and price per item, so the reader knows whether people buy more items or pricier ones.",
+    "source": "analyst",
+    "reviewed_by": "prototype seed",
+    "version": 1
+  },
+  {
+    "id": "new-vs-returning",
+    "question": "How many of our customers are new versus returning each month?",
+    "definitions": "A customer is new in the month of their first completed order and returning in any later month they order.",
+    "sql": "WITH purchases AS (\n  SELECT user_id, DATE_TRUNC(DATE(created_at), MONTH) AS month\n  FROM order_items\n  WHERE status NOT IN ('Cancelled', 'Returned')\n  GROUP BY user_id, month\n),\nfirsts AS (SELECT user_id, MIN(month) AS first_month FROM purchases GROUP BY user_id)\nSELECT FORMAT_DATE('%Y-%m', p.month) AS month,\n  COUNTIF(p.month = f.first_month) AS new_customers,\n  COUNTIF(p.month > f.first_month) AS returning_customers\nFROM purchases p\nJOIN firsts f USING (user_id)\nWHERE p.month >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 12 MONTH)\n  AND p.month < DATE_TRUNC(CURRENT_DATE(), MONTH)\nGROUP BY month\nORDER BY month",
+    "report": "Show new and returning customers per month and the returning share. A low returning share means growth depends on finding new buyers; suggest retention actions if so.",
+    "source": "analyst",
+    "reviewed_by": "prototype seed",
+    "version": 1
+  },
+  {
+    "id": "traffic-source",
+    "question": "Which marketing channels bring us the most valuable customers?",
+    "definitions": "Channel = users.traffic_source (how the customer first found us). Value = revenue per customer over the last 12 months.",
+    "sql": "SELECT u.traffic_source,\n  COUNT(DISTINCT oi.user_id) AS customers,\n  ROUND(SUM(oi.sale_price), 2) AS revenue,\n  ROUND(SUM(oi.sale_price) / COUNT(DISTINCT oi.user_id), 2) AS revenue_per_customer\nFROM order_items oi\nJOIN users u ON oi.user_id = u.id\nWHERE oi.status NOT IN ('Cancelled', 'Returned')\n  AND DATE(oi.created_at) >= DATE_SUB(CURRENT_DATE(), INTERVAL 12 MONTH)\n  AND oi.created_at <= CURRENT_TIMESTAMP()\nGROUP BY u.traffic_source\nORDER BY revenue_per_customer DESC",
+    "report": "Compare channels on revenue per customer, not just total revenue: a channel can bring many customers who spend little. The data has no marketing cost, so this shows value per customer, not return on spend; say so.",
+    "source": "analyst",
+    "reviewed_by": "prototype seed",
+    "version": 1
+  },
+  {
+    "id": "brand-margin",
+    "question": "Which brands are the most profitable for us?",
+    "definitions": "Gross margin = sale_price - products.cost, for items not Cancelled or Returned. Margin % = gross margin / revenue.",
+    "sql": "SELECT p.brand,\n  ROUND(SUM(oi.sale_price), 2) AS revenue,\n  ROUND(SUM(oi.sale_price - p.cost), 2) AS gross_margin,\n  ROUND(SUM(oi.sale_price - p.cost) / SUM(oi.sale_price), 3) AS margin_pct\nFROM order_items oi\nJOIN products p ON oi.product_id = p.id\nWHERE oi.status NOT IN ('Cancelled', 'Returned')\n  AND DATE(oi.created_at) >= DATE_SUB(CURRENT_DATE(), INTERVAL 12 MONTH)\n  AND oi.created_at <= CURRENT_TIMESTAMP()\nGROUP BY p.brand\nORDER BY gross_margin DESC\nLIMIT 15",
+    "report": "Rank brands by gross margin in money, and show margin % next to it: a brand can earn a lot in total at a thin margin. This is gross margin only; shipping, returns handling and marketing costs are not in the data.",
+    "source": "analyst",
+    "reviewed_by": "prototype seed",
+    "version": 1
+  },
+  {
+    "id": "distribution-center-performance",
+    "question": "How are our distribution centers performing?",
+    "definitions": "Per center: revenue as in monthly-revenue, return rate as in return-rate-by-category, and average days from order to delivery for delivered items.",
+    "sql": "SELECT dc.name AS distribution_center,\n  ROUND(SUM(IF(oi.status NOT IN ('Cancelled', 'Returned'), oi.sale_price, 0)), 2) AS revenue,\n  ROUND(COUNTIF(oi.status = 'Returned') / NULLIF(COUNTIF(oi.status != 'Cancelled'), 0), 3) AS return_rate,\n  ROUND(AVG(IF(oi.delivered_at IS NOT NULL, TIMESTAMP_DIFF(oi.delivered_at, oi.created_at, HOUR) / 24, NULL)), 1) AS avg_days_to_deliver\nFROM order_items oi\nJOIN products p ON oi.product_id = p.id\nJOIN distribution_centers dc ON p.distribution_center_id = dc.id\nWHERE DATE(oi.created_at) >= DATE_SUB(CURRENT_DATE(), INTERVAL 12 MONTH)\n  AND oi.created_at <= CURRENT_TIMESTAMP()\nGROUP BY distribution_center\nORDER BY revenue DESC",
+    "report": "Give one line per center with revenue, return rate and delivery time, and call out any center that is clearly slower or has more returns than the rest.",
+    "source": "analyst",
+    "reviewed_by": "prototype seed",
+    "version": 1
+  },
+  {
+    "id": "customer-demographics",
+    "question": "Who are our customers by age and gender, and who spends the most?",
+    "definitions": "Age bands: under 25, 25-34, 35-44, 45-54, 55 and over. Spend as in state-underspending. Never show individual customers.",
+    "sql": "SELECT\n  CASE WHEN u.age < 25 THEN 'under 25' WHEN u.age < 35 THEN '25-34' WHEN u.age < 45 THEN '35-44' WHEN u.age < 55 THEN '45-54' ELSE '55+' END AS age_band,\n  u.gender,\n  COUNT(DISTINCT oi.user_id) AS customers,\n  ROUND(SUM(oi.sale_price) / COUNT(DISTINCT oi.user_id), 2) AS spend_per_customer\nFROM order_items oi\nJOIN users u ON oi.user_id = u.id\nWHERE oi.status NOT IN ('Cancelled', 'Returned')\n  AND DATE(oi.created_at) >= DATE_SUB(CURRENT_DATE(), INTERVAL 12 MONTH)\n  AND oi.created_at <= CURRENT_TIMESTAMP()\nGROUP BY age_band, u.gender\nORDER BY age_band, u.gender",
+    "report": "Describe the customer mix by age band and gender, and which groups spend most per customer. Only report groups, never individuals.",
+    "source": "analyst",
+    "reviewed_by": "prototype seed",
+    "version": 1
+  },
+  {
+    "id": "sales-drop-drivers",
+    "question": "Why did sales of Jeans drop last month?",
+    "definitions": "Compare last full month with the month before. Break the change down by brand to find which ones drive it, then by price versus volume.",
+    "sql": "WITH monthly AS (\n  SELECT p.brand, DATE_TRUNC(DATE(oi.created_at), MONTH) AS month, SUM(oi.sale_price) AS revenue, COUNT(*) AS items\n  FROM order_items oi\n  JOIN products p ON oi.product_id = p.id\n  WHERE oi.status NOT IN ('Cancelled', 'Returned')\n    AND p.category = 'Jeans'\n    AND DATE(oi.created_at) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 2 MONTH)\n    AND DATE(oi.created_at) < DATE_TRUNC(CURRENT_DATE(), MONTH)\n  GROUP BY p.brand, month\n)\nSELECT brand,\n  ROUND(SUM(IF(month = DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 1 MONTH), revenue, 0)), 2) AS last_month,\n  ROUND(SUM(IF(month = DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 2 MONTH), revenue, 0)), 2) AS month_before,\n  ROUND(SUM(IF(month = DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 1 MONTH), revenue, -revenue)), 2) AS change\nFROM monthly\nGROUP BY brand\nORDER BY change\nLIMIT 10",
+    "report": "Give the overall change first, then the brands that account for most of it. Say whether the drop is fewer items sold or lower prices. Category values are capitalised in the data ('Jeans'); check exact values with SELECT DISTINCT before filtering.",
+    "source": "analyst",
+    "reviewed_by": "prototype seed",
+    "version": 1
+  }
+]
